@@ -1,0 +1,29 @@
+# IDE and editor files
+.vscode/
+.zed/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
+
+# Environment files
+.env
+.env.local
+
+# Zig build artifacts
+.zig-cache/
+zig-out/
+*.o
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib

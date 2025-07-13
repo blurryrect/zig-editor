@@ -1,116 +1,79 @@
 const std = @import("std");
 
-// Although this function looks imperative, note that its job is to
-// declaratively construct a build graph that will be executed by an external
-// runner.
 pub fn build(b: *std.Build) void {
-    // Standard target options allows the person running `zig build` to choose
+    // Standard target options allow the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
+    // means any target is allowed, and the default is native.
     const target = b.standardTargetOptions(.{});
 
     // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
+    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const optimize = b.standardOptimizeOption(.{});
 
-    // This creates a "module", which represents a collection of source files alongside
+    // This creates a module, which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.
-    // Every executable or library we compile will be based on one or more modules.
-    const lib_mod = b.createModule(.{
-        // `root_source_file` is the Zig "entry point" of the module. If a module
-        // only contains e.g. external object files, you can make this `null`.
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
+    // This module can be imported by consumers of this package.
+    const pleditor_module = b.addModule("pleditor", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    // We will also create a module for our other entry point, 'main.zig'.
-    const exe_mod = b.createModule(.{
-        // `root_source_file` is the Zig "entry point" of the module. If a module
-        // only contains e.g. external object files, you can make this `null`.
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // Modules can depend on one another using the `std.Build.Module.addImport` function.
-    // This is what allows Zig source code to use `@import("foo")` where 'foo' is not a
-    // file path. In this case, we set up `exe_mod` to import `lib_mod`.
-    exe_mod.addImport("zig_editor_lib", lib_mod);
-
-    // Now, we will create a static library based on the module we created above.
-    // This creates a `std.Build.Step.Compile`, which is the build step responsible
-    // for actually invoking the compiler.
-    const lib = b.addLibrary(.{
-        .linkage = .static,
-        .name = "zig_editor",
-        .root_module = lib_mod,
-    });
-
-    // This declares intent for the library to be installed into the standard
-    // location when the user invokes the "install" step (the default step when
-    // running `zig build`).
-    b.installArtifact(lib);
-
-    // This creates another `std.Build.Step.Compile`, but this one builds an executable
-    // rather than a static library.
+    // Create the executable
     const exe = b.addExecutable(.{
-        .name = "zig_editor",
-        .root_module = exe_mod,
+        .name = "pleditor",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "pleditor", .module = pleditor_module },
+            },
+        }),
     });
+
+    // Link with libc for terminal and file operations
+    exe.linkLibC();
 
     // This declares intent for the executable to be installed into the
-    // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
+    // install prefix when running `zig build`.
     b.installArtifact(exe);
 
-    // This *creates* a Run step in the build graph, to be executed when another
-    // step is evaluated that depends on it. The next line below will establish
-    // such a dependency.
+    // This creates a top level step that can be invoked with `zig build run`.
+    const run_step = b.step("run", "Run the pleditor application");
+
+    // This creates a RunArtifact step in the build graph.
     const run_cmd = b.addRunArtifact(exe);
+    run_step.dependOn(&run_cmd.step);
 
     // By making the run step depend on the install step, it will be run from the
     // installation directory rather than directly from within the cache directory.
-    // This is not necessary, however, if the application depends on other installed
-    // files, this ensures they will be present and in the expected location.
     run_cmd.step.dependOn(b.getInstallStep());
 
     // This allows the user to pass arguments to the application in the build
-    // command itself, like this: `zig build run -- arg1 arg2 etc`
+    // command itself, like this: `zig build run -- filename.txt`
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
 
-    // This creates a build step. It will be visible in the `zig build --help` menu,
-    // and can be selected like this: `zig build run`
-    // This will evaluate the `run` step rather than the default, which is "install".
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
-
-    // Creates a step for unit testing. This only builds the test executable
-    // but does not run it.
-    const lib_unit_tests = b.addTest(.{
-        .root_module = lib_mod,
+    // Creates a test executable for the pleditor module
+    const module_tests = b.addTest(.{
+        .root_module = pleditor_module,
     });
 
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+    // A run step that will run the module tests
+    const run_module_tests = b.addRunArtifact(module_tests);
 
-    const exe_unit_tests = b.addTest(.{
-        .root_module = exe_mod,
+    // Creates a test executable for the main executable's root module
+    const exe_tests = b.addTest(.{
+        .root_module = exe.root_module,
     });
 
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+    // A run step that will run the executable tests
+    const run_exe_tests = b.addRunArtifact(exe_tests);
 
-    // Similar to creating the run step earlier, this exposes a `test` step to
-    // the `zig build --help` menu, providing a way for the user to request
-    // running the unit tests.
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_lib_unit_tests.step);
-    test_step.dependOn(&run_exe_unit_tests.step);
+    // A top level step for running all tests
+    const test_step = b.step("test", "Run all tests");
+    test_step.dependOn(&run_module_tests.step);
+    test_step.dependOn(&run_exe_tests.step);
 }

@@ -1,46 +1,52 @@
-//! By convention, main.zig is where your main function lives in the case that
-//! you are building an executable. If you are making a library, the convention
-//! is to delete this file and start with root.zig instead.
+//! main.zig - Entry point for pleditor
+const std = @import("std");
+const pleditor = @import("pleditor.zig");
+const platform = @import("platform.zig");
+const syntax = @import("syntax.zig");
+const linux_platform = @import("platform/linux.zig");
 
 pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+    // Get command line arguments
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+    // Initialize platform
+    platform.setPlatform(&linux_platform.linux_platform);
 
-    try bw.flush(); // Don't forget to flush!
-}
+    if (!platform.platformInit()) {
+        std.debug.print("Failed to initialize terminal\n", .{});
+        return;
+    }
+    defer platform.platformCleanup();
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
-
-test "use other module" {
-    try std.testing.expectEqual(@as(i32, 150), lib.add(100, 50));
-}
-
-test "fuzz example" {
-    const Context = struct {
-        fn testOne(context: @This(), input: []const u8) anyerror!void {
-            _ = context;
-            // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
-        }
+    // Initialize editor state
+    var state = pleditor.State.init(allocator) catch {
+        std.debug.print("Failed to initialize editor state\n", .{});
+        return;
     };
-    try std.testing.fuzz(Context{}, Context.testOne, .{});
+    defer state.deinit();
+
+    // Initialize syntax highlighting
+    _ = syntax.syntaxInit(&state);
+
+    // Open file if specified
+    if (args.len >= 2) {
+        if (!state.open(args[1])) {
+            return;
+        }
+    }
+
+    // Set initial status message
+    state.setStatusMessage("HELP: Ctrl-S = save/save as | Ctrl-Q = quit | Ctrl-R = toggle line numbers", .{});
+
+    // Main editor loop
+    while (!state.should_quit) {
+        state.refreshScreen();
+        const c = platform.platformReadKey();
+        state.handleKeypress(c);
+    }
 }
-
-const std = @import("std");
-
-/// This imports the separate module containing `root.zig`. Take a look in `build.zig` for details.
-const lib = @import("zig_editor_lib");
